@@ -31,6 +31,9 @@ Run `npm run build`; the production site is generated in `dist/`.
    ```
 3. In Vercel, choose **Add New → Project**, import the GitHub repository, and deploy. Vercel should detect Vite automatically. Build command: `npm run build`; output directory: `dist`.
 
+## PDF worker stability
+The PDF.js source passed to `react-pdf` is memoized so ordinary React state updates do not create a new source object and cause PDF.js to reuse a transferred/detached `ArrayBuffer`. If you already imported a PDF before updating, reopen it after deploying the fix.
+
 ## MVP notes
 - PDFs, progress, bookmarks, and notes are stored locally in this browser on this device. There is no account or cloud sync yet.
 - Use the in-app **Export backup** button regularly. Browser storage can be cleared by device/browser settings.
