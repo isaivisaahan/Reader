@@ -10,6 +10,7 @@ import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './d
 
 type Theme = 'paper' | 'sepia' | 'night';
 type ScrollMode = 'single' | 'continuous';
+type GestureType = 'none' | 'deciding' | 'pinch' | 'turn' | 'brightness';
 
 const coverColors = ['#d7e1d5', '#ead8c5', '#d7dce8', '#e8d5d7', '#d9e2e5', '#e9e3cb'];
 const fmtSize = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`;
@@ -41,10 +42,35 @@ export default function App() {
   const [sort, setSort] = useState<'recent' | 'title' | 'added'>('recent');
   const [importing, setImporting] = useState(false);
 
+  // Animation & brightness states
+  const [turnDirection, setTurnDirection] = useState<'next' | 'prev' | null>(null);
+  const [brightness, setBrightness] = useState<number>(1.0);
+  const [showBrightnessHud, setShowBrightnessHud] = useState<boolean>(false);
+  const hudTimerRef = useRef<number | null>(null);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const readerRef = useRef<HTMLDivElement>(null);
-  const pinchStartDist = useRef<number | null>(null);
-  const pinchStartZoom = useRef<number>(1);
+  const transformLayerRef = useRef<HTMLDivElement>(null);
+  const singlePageWrapRef = useRef<HTMLDivElement>(null);
+
+  // Multi-touch Gesture tracking
+  const gestureRef = useRef<{
+    type: GestureType;
+    startDist: number;
+    startCenterX: number;
+    startCenterY: number;
+    startZoom: number;
+    startBrightness: number;
+    currentDeltaX: number;
+  }>({
+    type: 'none',
+    startDist: 0,
+    startCenterX: 0,
+    startCenterY: 0,
+    startZoom: 1,
+    startBrightness: 1,
+    currentDeltaX: 0
+  });
 
   const refresh = async () => {
     const [b, bm, ns] = await Promise.all([db.books.toArray(), db.bookmarks.toArray(), db.notes.toArray()]);
@@ -153,6 +179,23 @@ export default function App() {
     setBooks(prev => prev.map(b => b.id === active.id ? { ...b, lastPage: p, pageCount: total || b.pageCount, progress, lastOpened: Date.now() } : b));
   };
 
+  // Animated Page Turn
+  const animatedJump = (targetPage: number, dir: 'next' | 'prev') => {
+    if (scrollMode === 'continuous') {
+      jump(targetPage);
+      return;
+    }
+    const next = Math.min(Math.max(1, targetPage), pageCount || 1);
+    if (next === page) return;
+
+    setTurnDirection(dir);
+    window.setTimeout(() => {
+      setPage(next);
+      void updateProgress(next, pageCount);
+      setTurnDirection(null);
+    }, 280);
+  };
+
   const jump = (p: number) => {
     const next = Math.min(Math.max(1, p), pageCount || 1);
     setPage(next);
@@ -166,6 +209,20 @@ export default function App() {
     }
   };
 
+  // Keyboard Navigation with Page Turn Animation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!active || showNotes) return;
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        if (!pageCount || page < pageCount) animatedJump(page + 1, 'next');
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        if (page > 1) animatedJump(page - 1, 'prev');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [active, page, pageCount, showNotes, scrollMode]);
+
   const toggleFullscreen = async () => {
     try {
       if (!document.fullscreenElement) {
@@ -178,34 +235,121 @@ export default function App() {
     }
   };
 
-  // Pinch-to-zoom and Ctrl+wheel handling
+  // =========================================================================
+  // MULTI-TOUCH 2-FINGER GESTURE ENGINE
+  // =========================================================================
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 2) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      pinchStartDist.current = dist;
-      pinchStartZoom.current = zoom;
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const centerX = (t1.clientX + t2.clientX) / 2;
+      const centerY = (t1.clientY + t2.clientY) / 2;
+
+      gestureRef.current = {
+        type: 'deciding',
+        startDist: dist,
+        startCenterX: centerX,
+        startCenterY: centerY,
+        startZoom: zoom,
+        startBrightness: brightness,
+        currentDeltaX: 0
+      };
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length === 2 && pinchStartDist.current !== null) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      const factor = dist / pinchStartDist.current;
-      const nextZoom = Math.min(2.5, Math.max(0.6, +(pinchStartZoom.current * factor).toFixed(2)));
-      setZoom(nextZoom);
+    if (e.touches.length !== 2) return;
+    const t1 = e.touches[0];
+    const t2 = e.touches[1];
+    const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+    const currentCenterX = (t1.clientX + t2.clientX) / 2;
+    const currentCenterY = (t1.clientY + t2.clientY) / 2;
+
+    const deltaDist = currentDist - gestureRef.current.startDist;
+    const deltaX = currentCenterX - gestureRef.current.startCenterX;
+    const deltaY = currentCenterY - gestureRef.current.startCenterY;
+
+    // Determine Gesture Intent
+    if (gestureRef.current.type === 'deciding') {
+      if (Math.abs(deltaDist) > 22) {
+        gestureRef.current.type = 'pinch';
+      } else if (Math.abs(deltaY) > 20 && Math.abs(deltaY) > Math.abs(deltaX) * 1.25) {
+        gestureRef.current.type = 'brightness';
+      } else if (Math.abs(deltaX) > 20 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+        gestureRef.current.type = 'turn';
+      }
+    }
+
+    // 1. PINCH-TO-ZOOM (Hardware-accelerated CSS GPU scaling)
+    if (gestureRef.current.type === 'pinch') {
+      const scaleRatio = currentDist / gestureRef.current.startDist;
+      if (transformLayerRef.current) {
+        transformLayerRef.current.style.transform = `scale(${scaleRatio})`;
+        transformLayerRef.current.style.transition = 'none';
+      }
+    }
+
+    // 2. BRIGHTNESS CONTROL (2-Finger Vertical Swipe)
+    else if (gestureRef.current.type === 'brightness') {
+      const sensitivity = 0.0035;
+      const newBright = Math.min(1.0, Math.max(0.15, +(gestureRef.current.startBrightness - deltaY * sensitivity).toFixed(2)));
+      setBrightness(newBright);
+      setShowBrightnessHud(true);
+
+      if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current);
+      hudTimerRef.current = window.setTimeout(() => setShowBrightnessHud(false), 1400);
+    }
+
+    // 3. PAGE TURN SLIDE (2-Finger Horizontal Slide with 3D Page Curl)
+    else if (gestureRef.current.type === 'turn' && scrollMode === 'single') {
+      gestureRef.current.currentDeltaX = deltaX;
+      if (singlePageWrapRef.current) {
+        const turnAngle = Math.max(-55, Math.min(55, deltaX * 0.22));
+        const translateX = deltaX * 0.45;
+        singlePageWrapRef.current.style.transform = `perspective(1600px) rotateY(${turnAngle}deg) translateX(${translateX}px)`;
+        singlePageWrapRef.current.style.transition = 'none';
+        singlePageWrapRef.current.style.boxShadow = `${-deltaX * 0.15}px 12px 35px rgba(0,0,0,0.22)`;
+      }
     }
   };
 
   const handleTouchEnd = () => {
-    pinchStartDist.current = null;
+    const { type, startDist, startZoom, currentDeltaX } = gestureRef.current;
+
+    // Reset Pinch: Commit high-res PDF zoom smoothly once
+    if (type === 'pinch') {
+      if (transformLayerRef.current) {
+        const matrix = new DOMMatrix(getComputedStyle(transformLayerRef.current).transform);
+        const appliedScale = matrix.a || 1;
+        transformLayerRef.current.style.transform = 'none';
+        transformLayerRef.current.style.transition = 'none';
+
+        const finalZoom = Math.min(2.5, Math.max(0.6, +(startZoom * appliedScale).toFixed(2)));
+        setZoom(finalZoom);
+      }
+    }
+
+    // Reset Page Turn Slide: Determine if turn threshold was reached
+    if (type === 'turn' && scrollMode === 'single') {
+      if (singlePageWrapRef.current) {
+        singlePageWrapRef.current.style.transform = 'none';
+        singlePageWrapRef.current.style.transition = 'transform 0.25s ease, box-shadow 0.25s ease';
+        singlePageWrapRef.current.style.boxShadow = '';
+      }
+
+      if (currentDeltaX < -65 && (!pageCount || page < pageCount)) {
+        animatedJump(page + 1, 'next');
+      } else if (currentDeltaX > 65 && page > 1) {
+        animatedJump(page - 1, 'prev');
+      }
+    }
+
+    gestureRef.current.type = 'none';
+    gestureRef.current.currentDeltaX = 0;
   };
 
+  // Trackpad pinch-to-zoom (Ctrl + Wheel)
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey) {
       e.preventDefault();
@@ -213,7 +357,7 @@ export default function App() {
     }
   };
 
-  // Intersection observer to track current page in continuous mode
+  // Page observer for continuous scroll
   useEffect(() => {
     if (scrollMode !== 'continuous' || !pageCount) return;
     const observer = new IntersectionObserver(
@@ -318,6 +462,23 @@ export default function App() {
 
     return (
       <div className={`app reader-app theme-${theme}`}>
+        {/* Real-time Screen Dimming Overlay */}
+        <div
+          className="reader-brightness-overlay"
+          style={{ opacity: Math.max(0, 1 - brightness) }}
+        />
+
+        {/* Floating Brightness HUD */}
+        {showBrightnessHud && (
+          <div className="brightness-hud">
+            <Sun size={18} />
+            <div className="brightness-hud-track">
+              <div className="brightness-hud-fill" style={{ width: `${Math.round(brightness * 100)}%` }} />
+            </div>
+            <span className="brightness-hud-value">{Math.round(brightness * 100)}%</span>
+          </div>
+        )}
+
         <header className="reader-topbar">
           <button className="icon-btn" onClick={closeBook} aria-label="Back to library">
             <ChevronLeft />
@@ -330,7 +491,7 @@ export default function App() {
             <button
               className={`icon-btn ${scrollMode === 'continuous' ? 'active-mode' : ''}`}
               onClick={() => setScrollMode(m => m === 'single' ? 'continuous' : 'single')}
-              title={scrollMode === 'single' ? 'Switch to Continuous scroll' : 'Switch to Page by Page'}
+              title={scrollMode === 'single' ? 'Continuous scroll' : 'Page by page'}
             >
               {scrollMode === 'single' ? <Rows3 /> : <FileText />}
             </button>
@@ -368,60 +529,68 @@ export default function App() {
             {loading && <div className="loading-state">Opening your book…</div>}
             {pdfPreparing && <div className="loading-state">Preparing your saved PDF…</div>}
 
-            <Document
-              file={pdfFile}
-              onLoadSuccess={({ numPages }) => {
-                setPageCount(numPages);
-                void updateProgress(Math.min(active.lastPage || 1, numPages), numPages);
-              }}
-              onLoadError={(error) => {
-                console.error('Folio PDF.js load error:', error);
-                setToast(`PDF could not be opened: ${error.message || 'unknown error'}`);
-              }}
-              loading={<div className="loading-state">Preparing pages…</div>}
-            >
-              {scrollMode === 'single' ? (
-                <div
-                  className="pdf-page-wrap"
-                  onMouseUp={() => {
-                    const text = window.getSelection()?.toString().trim() ?? '';
-                    if (text) setSelectedText(text.slice(0, 4000));
-                  }}
-                >
-                  <Page
-                    pageNumber={page}
-                    scale={zoom}
-                    renderTextLayer
-                    renderAnnotationLayer={false}
-                    loading={<div className="page-skeleton" />}
-                  />
-                </div>
-              ) : (
-                Array.from({ length: pageCount || 1 }, (_, i) => i + 1).map(p => (
+            <div className="stage-transform-layer" ref={transformLayerRef}>
+              <Document
+                file={pdfFile}
+                onLoadSuccess={({ numPages }) => {
+                  setPageCount(numPages);
+                  void updateProgress(Math.min(active.lastPage || 1, numPages), numPages);
+                }}
+                onLoadError={(error) => {
+                  console.error('Folio PDF.js load error:', error);
+                  setToast(`PDF could not be opened: ${error.message || 'unknown error'}`);
+                }}
+                loading={<div className="loading-state">Preparing pages…</div>}
+              >
+                {scrollMode === 'single' ? (
                   <div
-                    key={p}
-                    id={`folio-page-${p}`}
-                    data-page-number={p}
-                    className="pdf-page-wrap"
+                    ref={singlePageWrapRef}
+                    className={`pdf-page-wrap ${turnDirection ? `turning-${turnDirection}` : ''}`}
                     onMouseUp={() => {
                       const text = window.getSelection()?.toString().trim() ?? '';
                       if (text) setSelectedText(text.slice(0, 4000));
                     }}
                   >
                     <Page
-                      pageNumber={p}
+                      pageNumber={page}
                       scale={zoom}
                       renderTextLayer
                       renderAnnotationLayer={false}
                       loading={<div className="page-skeleton" />}
                     />
                   </div>
-                ))
-              )}
-            </Document>
+                ) : (
+                  Array.from({ length: pageCount || 1 }, (_, i) => i + 1).map(p => (
+                    <div
+                      key={p}
+                      id={`folio-page-${p}`}
+                      data-page-number={p}
+                      className="pdf-page-wrap"
+                      onMouseUp={() => {
+                        const text = window.getSelection()?.toString().trim() ?? '';
+                        if (text) setSelectedText(text.slice(0, 4000));
+                      }}
+                    >
+                      <Page
+                        pageNumber={p}
+                        scale={zoom}
+                        renderTextLayer
+                        renderAnnotationLayer={false}
+                        loading={<div className="page-skeleton" />}
+                      />
+                    </div>
+                  ))
+                )}
+              </Document>
+            </div>
 
             <div className="page-controls">
-              <button className="icon-btn" disabled={page <= 1} onClick={() => jump(page - 1)} aria-label="Previous page">
+              <button
+                className="icon-btn"
+                disabled={page <= 1}
+                onClick={() => animatedJump(page - 1, 'prev')}
+                aria-label="Previous page"
+              >
                 <ChevronLeft />
               </button>
               <div className="page-count">
@@ -437,7 +606,12 @@ export default function App() {
                 />
                 <span>of {pageCount || '—'}</span>
               </div>
-              <button className="icon-btn" disabled={!!pageCount && page >= pageCount} onClick={() => jump(page + 1)} aria-label="Next page">
+              <button
+                className="icon-btn"
+                disabled={!!pageCount && page >= pageCount}
+                onClick={() => animatedJump(page + 1, 'next')}
+                aria-label="Next page"
+              >
                 <ChevronRight />
               </button>
               <span className="control-divider" />
