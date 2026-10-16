@@ -14,6 +14,10 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
+  // Keep the react-pdf source object stable across reader UI state updates.
+  // PDF.js may transfer/detach the typed array's underlying buffer to its worker;
+  // recreating { data: pdfData } on every render can make it try to reuse that buffer.
+  const pdfFile = useMemo(() => pdfData ? { data: pdfData } : null, [pdfData]);
   const [pdfPreparing, setPdfPreparing] = useState(false);
   const [theme, setTheme] = useState<Theme>('paper');
   const [query, setQuery] = useState('');
@@ -135,7 +139,7 @@ export default function App() {
         <section className="page-stage" ref={readerRef}>
           {loading && <div className="loading-state">Opening your book…</div>}
           {pdfPreparing && <div className="loading-state">Preparing your saved PDF…</div>}
-          <Document file={pdfData ? { data: pdfData } : null} onLoadSuccess={({numPages})=>{setPageCount(numPages); void updateProgress(Math.min(active.lastPage||1,numPages),numPages);}} onLoadError={(error)=>{console.error('Folio PDF.js load error:', error); setToast(`PDF could not be opened: ${error.message || 'unknown PDF.js error'}`);}} onSourceError={(error)=>{console.error('Folio PDF source error:', error); setToast(`Could not read PDF source: ${error.message || 'unknown source error'}`);}} loading={<div className="loading-state">Preparing pages…</div>}>
+          <Document file={pdfFile} onLoadSuccess={({numPages})=>{setPageCount(numPages); void updateProgress(Math.min(active.lastPage||1,numPages),numPages);}} onLoadError={(error)=>{console.error('Folio PDF.js load error:', error); setToast(`PDF could not be opened: ${error.message || 'unknown PDF.js error'}`);}} onSourceError={(error)=>{console.error('Folio PDF source error:', error); setToast(`Could not read PDF source: ${error.message || 'unknown source error'}`);}} loading={<div className="loading-state">Preparing pages…</div>}>
             <div className="pdf-page-wrap" onMouseUp={()=>{const text=window.getSelection()?.toString().trim() ?? ''; if(text) setSelectedText(text.slice(0,4000));}} onTouchEnd={()=>{window.setTimeout(()=>{const text=window.getSelection()?.toString().trim() ?? ''; if(text) setSelectedText(text.slice(0,4000));},80);}}>
               <Page pageNumber={page} scale={zoom} renderTextLayer renderAnnotationLayer loading={<div className="page-skeleton"/>} onRenderSuccess={()=>{}} />
             </div>
