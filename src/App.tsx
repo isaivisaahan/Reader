@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { Document, Page } from 'react-pdf';
 import { BookOpen, Bookmark, Check, ChevronLeft, ChevronRight, FilePlus2, Files, Highlighter, Home, LibraryBig, ListFilter, Maximize2, Moon, MoreHorizontal, NotebookPen, Search, Settings2, Sun, Trash2, Upload, X, ZoomIn, ZoomOut, Download, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './db';
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
 type Theme = 'paper' | 'sepia' | 'night';
 const coverColors = ['#d7e1d5','#ead8c5','#d7dce8','#e8d5d7','#d9e2e5','#e9e3cb'];
 const fmtSize = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`;
@@ -18,9 +14,8 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
-  // Keep the react-pdf source object stable across reader UI state updates.
-  // PDF.js may transfer/detach the typed array's underlying buffer to its worker;
-  // recreating { data: pdfData } on every render can make it try to reuse that buffer.
+  // Keep the PDF source stable across UI renders. PDF.js may transfer the underlying
+  // ArrayBuffer to its worker, so do not recreate the { data } source object each render.
   const pdfFile = useMemo(() => pdfData ? { data: pdfData } : null, [pdfData]);
   const [pdfPreparing, setPdfPreparing] = useState(false);
   const [theme, setTheme] = useState<Theme>('paper');
