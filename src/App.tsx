@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Document, Page } from 'react-pdf';
+import { Document, Page, pdfjs } from 'react-pdf';
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString();
 import { BookOpen, Bookmark, Check, ChevronLeft, ChevronRight, FilePlus2, Files, Highlighter, Home, LibraryBig, ListFilter, Maximize2, Moon, MoreHorizontal, NotebookPen, Search, Settings2, Sun, Trash2, Upload, X, ZoomIn, ZoomOut, Download, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './db';
 
