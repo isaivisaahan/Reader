@@ -1,10 +1,10 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/TextLayer.css';
 import App from './App';
 import './styles.css';
 
-// Configures local offline-capable PDF.js worker matching react-pdf's bundled version
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url
