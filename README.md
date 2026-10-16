@@ -31,12 +31,13 @@ Run `npm run build`; the production site is generated in `dist/`.
    ```
 3. In Vercel, choose **Add New → Project**, import the GitHub repository, and deploy. Vercel should detect Vite automatically. Build command: `npm run build`; output directory: `dist`.
 
-## PDF worker stability
-The PDF.js source passed to `react-pdf` is memoized so ordinary React state updates do not create a new source object and cause PDF.js to reuse a transferred/detached `ArrayBuffer`. If you already imported a PDF before updating, reopen it after deploying the fix.
-
 ## MVP notes
 - PDFs, progress, bookmarks, and notes are stored locally in this browser on this device. There is no account or cloud sync yet.
 - Use the in-app **Export backup** button regularly. Browser storage can be cleared by device/browser settings.
 - Browser storage quotas and persistence vary by browser. Very large libraries should be tested on the target tablet.
 - Scanned PDFs display normally, but searchable text and text-based highlights require an OCR feature in a future release.
 - This is an early MVP; validate on the target Android tablet before relying on it as the only copy of important notes.
+
+
+## PDF.js version consistency
+`pdfjs-dist` and `react-pdf` are pinned to exact versions in `package.json` to avoid version drift. The PDF.js worker is configured once in `src/main.tsx` from the same installed `pdfjs-dist` package. PWA Workbox settings clean outdated precache entries and activate updated workers. After replacing the repository files, allow Vercel to make a fresh deployment and clear the site's service-worker cache once if an older deployment was previously installed.
